@@ -1,0 +1,100 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Print Environment Variables') {
+            when {
+                expression {2==2}
+            }
+            steps {
+                bat 'echo %PATH%'
+                bat 'mvn -v'
+            }
+        }
+        stage('chekout') {
+            when {
+                expression {2==2}
+            }
+            steps {
+              checkout scmGit(branches: [[name: '*/main']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/Jack-shah/spring-boot-manifest.git']])
+            }
+        }
+        stage('build jar file') {
+             when {
+                expression {2==2}
+            }
+            steps {
+                bat '''
+                cd %WORKSPACE%\\java-maven-sonar-argocd-helm-k8s\\spring-boot-app
+                mvn clean package
+                '''
+            }
+        }
+        stage('Static Coode Analysis') {
+            when {
+                expression {2==2}
+            }
+            steps {
+                withCredentials([string(credentialsId: 'Sonar_Auth', variable: 'SONAR_AUTH_TOKEN')]) {
+                   bat '''
+                        cd java-maven-sonar-argocd-helm-k8s\\spring-boot-app
+                         mvn sonar:sonar -Dsonar.login=%SONAR_AUTH_TOKEN% -Dsonar.host.url=http://localhost:9000
+                    '''
+                }
+            }
+        }
+        stage('docker build image') {
+            //when {
+              //  expression {2==3}
+            //}
+            steps {
+                bat '''
+                    cd java-maven-sonar-argocd-helm-k8s\\spring-boot-app 
+                    docker build -t awajid3/springbootapp:%BUILD_NUMBER% .
+                    '''
+                
+            }
+        }
+        stage('docker Push image') {
+           steps {
+                withCredentials([usernamePassword(credentialsId: 'docker_creds', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+                    bat '''
+                        echo %DOCKER_PASSWORD%
+                        echo %DOCKER_USERNAME%
+                        docker login -u %DOCKER_USERNAME% -p %DOCKER_PASSWORD%
+                        docker push awajid3/springbootapp:%BUILD_NUMBER%
+                    '''
+                }
+           }
+        }
+        stage('Update manifest with new image') {
+            environment{
+                GITHUB_USER = "Jack-shah"
+                GITHUB_REPO = "spring-boot-manifest"
+            }
+           steps {
+                withCredentials([string(credentialsId: 'github_token', variable: 'GITHUB_PAT')]) {
+                    bat '''
+                        git config --global user.name "awajid3"
+                        git config --global user.email "awajid980@gmail.com"
+                            
+                        set FILE=java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+                        set BUILD_NUMBER=%BUILD_NUMBER%
+                            
+                        REM Use PowerShell to replace everything after "image:"
+                        powershell -Command "$content = Get-Content -Path '%FILE%'; $content = $content -replace 'image:\\s*.*$', 'image:awajid3/springbootapp:%BUILD_NUMBER%'; Set-Content -Path '%FILE%' -Value $content"
+                        REM Add changes to Git
+                        git add %FILE%
+                            
+                        REM Commit changes with a message including the build number
+                        git commit -m "Update deployment image to version %BUILD_NUMBER%"
+                            
+                        REM Push changes to GitHub using the PAT from Jenkins credentials
+                        git push https://%GITHUB_PAT%@github.com/%GITHUB_USER%/%GITHUB_REPO% HEAD:refs/heads/main
+                        '''
+                    
+                }
+            }
+        }
+    }
+}
